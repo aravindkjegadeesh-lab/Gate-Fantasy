@@ -36,7 +36,7 @@ def calculate_fpl_points(mark):
     if mark <= 70: return 0
     return round(4 * math.pow((mark - 70), 1.2), 1)
 
-# MARKET DATA (Admin updates these prices manually on Sundays)
+# MARKET DATA
 MARKET_DATA = [
     {"name": "Ming", "price": 36.0}, {"name": "Cirrus", "price": 35.5}, {"name": "Gautham", "price": 33.0}, 
     {"name": "Dev", "price": 32.5}, {"name": "Forrest", "price": 30.0}, {"name": "Talal", "price": 28.5}, 
@@ -90,11 +90,7 @@ else:
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
         st.metric("Active Round", info['current_round'])
         st.info(f"📍 **Subjects in Play:** {info['subjects']}")
-        
-        st.markdown("""<div class="rule-box">
-            📊 <b>Market Update:</b> Player prices rise/fall by up to £5m every Sunday based on performance!
-        </div>""", unsafe_allow_html=True)
-        
+        st.markdown("""<div class="rule-box">📊 <b>Market Update:</b> Player prices rise/fall by up to £5m every Sunday!</div>""", unsafe_allow_html=True)
         st.markdown("---")
         hist = pd.read_sql("SELECT student, subject, mark, points FROM score_history WHERE round_name=? ORDER BY id DESC LIMIT 5", db_conn, params=(info['current_round'],))
         if not hist.empty: st.table(hist)
@@ -123,12 +119,7 @@ else:
 
     elif page == "My Squad":
         user = pd.read_sql("SELECT * FROM users WHERE username=?", db_conn, params=(st.session_state.user,)).iloc[0]
-        
-        st.markdown(f"""<div class="rule-box">
-            🔄 <b>Transfers:</b> 2 per week. Budget limit: £90m.<br>
-            📩 <b>Notify Admins:</b> Contact <b>Lucas Lau</b> or <b>Geonhee</b> for transfers!
-        </div>""", unsafe_allow_html=True)
-
+        st.markdown("""<div class="rule-box">🔄 <b>Transfers:</b> 2 per week. Budget limit: £90m.<br>📩 <b>Notify Admins:</b> Contact <b>Lucas Lau</b> or <b>Geonhee</b>!</div>""", unsafe_allow_html=True)
         t1, t2 = st.tabs(["Pick Team", "My Team"])
         with t1:
             sel = st.multiselect("Select 5 Players", player_options, max_selections=5)
@@ -164,9 +155,7 @@ else:
                 t_names = row['team'].split(", ")
                 t_cost = sum(player_prices[p] for p in t_names)
                 with st.expander(f"{row['username']} (£{round(90 - t_cost, 2)}m left)"):
-                    st.write(f"**Squad:** {row['team']}")
-                    st.write(f"**Captain:** {row['captain']}")
-                    st.write(f"**Bank:** £{round(90-t_cost, 2)}m")
+                    st.write(f"**Squad:** {row['team']} | **Captain:** {row['captain']} | **Bank:** £{round(90-t_cost, 2)}m")
 
     elif page == "Leaderboard":
         lb = pd.read_sql("SELECT username as Manager, total_points as Points FROM users ORDER BY total_points DESC", db_conn)
@@ -201,12 +190,29 @@ else:
                     db_conn.commit()
                     st.success("Points Added!")
             with t3:
-                u_df = pd.read_sql("SELECT username, password, total_points, tc_available FROM users", db_conn)
+                st.subheader("Manage Participants")
+                u_df = pd.read_sql("SELECT username, password, total_points FROM users", db_conn)
                 st.dataframe(u_df, use_container_width=True)
-                target = st.selectbox("Select User", u_df['username'])
-                if st.button("Update Pass (to '1234')"):
-                    db_conn.execute("UPDATE users SET password='1234' WHERE username=?", (target,))
-                    db_conn.commit()
-                if st.button("Restore TC Chip"):
+                
+                target = st.selectbox("Select User to Modify", u_df['username'])
+                col_pass, col_kick = st.columns(2)
+                
+                with col_pass:
+                    new_p = st.text_input("Set New Password", type="password")
+                    if st.button("Update Password"):
+                        db_conn.execute("UPDATE users SET password=? WHERE username=?", (new_p, target))
+                        db_conn.commit()
+                        st.success("Updated!")
+
+                with col_kick:
+                    if st.button("🔴 KICK PLAYER FROM GAME"):
+                        db_conn.execute("DELETE FROM users WHERE username=?", (target,))
+                        db_conn.commit()
+                        st.warning(f"User {target} has been removed.")
+                        st.rerun()
+                
+                st.divider()
+                if st.button("Restore TC Chip for User"):
                     db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target,))
                     db_conn.commit()
+                    st.success("Chip restored!")
