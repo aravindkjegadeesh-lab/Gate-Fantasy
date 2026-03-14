@@ -12,16 +12,13 @@ def get_connection():
 def init_db():
     conn = get_connection()
     c = conn.cursor()
-    # Users table
     c.execute('''CREATE TABLE IF NOT EXISTS users 
                  (username TEXT PRIMARY KEY, password TEXT, team TEXT, total_points REAL DEFAULT 0)''')
-    # Game State table (for Round and Deadline)
     c.execute('''CREATE TABLE IF NOT EXISTS game_state 
-                 (id INTEGER PRIMARY KEY, current_round TEXT, deadline TEXT)''')
-    # Initialize game state if empty
+                 (id INTEGER PRIMARY KEY, current_round TEXT, deadline TEXT, subjects TEXT)''')
     c.execute("SELECT COUNT(*) FROM game_state")
     if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO game_state (id, current_round, deadline) VALUES (1, 'Round 1', 'Not Set')")
+        c.execute("INSERT INTO game_state (id, current_round, deadline, subjects) VALUES (1, 'Round 1', 'Not Set', 'None')")
     conn.commit()
 
 init_db()
@@ -46,7 +43,6 @@ st.markdown("""
         border: 2px solid #38003c !important;
         border-radius: 8px !important;
     }
-    .stDataFrame { background-color: white; border-radius: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -69,7 +65,6 @@ df_market = pd.DataFrame(MARKET_DATA)
 price_dict = {row['name']: row['price'] for _, row in df_market.iterrows()}
 player_options = [f"{p['name']} (£{p['price']}m)" for p in MARKET_DATA]
 
-# --- HELPER FUNCTIONS ---
 def get_game_info():
     conn = get_connection()
     return pd.read_sql("SELECT * FROM game_state WHERE id=1", conn).iloc[0]
@@ -95,7 +90,7 @@ def signup(u, p):
     conn = get_connection()
     c = conn.cursor()
     try:
-        c.execute("INSERT INTO users (username, password, total_points, team) VALUES (?, ?, 0, 'No Team')", (u, p))
+        c.execute("INSERT INTO users (username, password, total_points, team) VALUES (?, ?, 0, 'No Team Set')", (u, p))
         conn.commit()
         st.success("✅ Account created! Please log in.")
     except sqlite3.IntegrityError:
@@ -125,18 +120,21 @@ else:
 
     if page == "Dashboard":
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87; margin:0;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
-        st.subheader(f"Hello, Manager {st.session_state.username}!")
+        st.subheader(f"Welcome, Manager {st.session_state.username}!")
         
-        col1, col2 = st.columns(2)
-        col1.metric("Current Round", info['current_round'])
-        col2.metric("Deadline", info['deadline'])
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Round", info['current_round'])
+        c2.metric("Deadline", info['deadline'])
+        c3.metric("Scoring Subjects", info['subjects'])
         
         st.write("---")
-        st.info("Make sure your squad is locked in before the deadline!")
+        st.markdown(f"### 📢 Round Info")
+        st.info(f"This round, students will earn points based on: **{info['subjects']}**.")
 
     elif page == "My Squad":
         st.header("🏃 Team Selection")
-        selected_display = st.multiselect("Pick 5 Players", player_options, max_selections=5)
+        st.write(f"Active Subjects: **{info['subjects']}**")
+        selected_display = st.multiselect("Pick 5 Players (£90m Budget)", player_options, max_selections=5)
         selected_names = [s.split(" (£")[0] for s in selected_display]
         
         if selected_names:
@@ -151,9 +149,8 @@ else:
                     st.success("✅ Team Saved!")
 
     elif page == "Leaderboard":
-        st.header("🏆 Leaderboard & Rival Teams")
+        st.header("🏆 Leaderboard")
         conn = get_connection()
-        # Showing the Team column so everyone can see the rival squads
         lb_df = pd.read_sql("SELECT username as Manager, total_points as Points, team as Squad FROM users ORDER BY total_points DESC", conn)
         st.dataframe(lb_df, use_container_width=True, hide_index=True)
 
@@ -164,19 +161,22 @@ else:
             t1, t2, t3 = st.tabs(["Game Status", "User Management", "Delete Users"])
             
             with t1:
-                st.write("### 📅 Set Round & Deadline")
-                new_round = st.text_input("Set Round Name", value=info['current_round'])
-                new_date = st.text_input("Set Deadline (e.g. Sunday 6pm)", value=info['deadline'])
+                st.write("### 📅 Set Round Details")
+                new_round = st.text_input("Round Name", value=info['current_round'])
+                new_date = st.text_input("Deadline", value=info['deadline'])
+                new_subs = st.multiselect("Active Subjects", ["Maths", "English", "HASS", "Science", "Music", "Languages"], default=info['subjects'].split(", ") if info['subjects'] != "None" else None)
+                
                 if st.button("Update Game Status"):
+                    subs_str = ", ".join(new_subs) if new_subs else "None"
                     conn = get_connection()
                     c = conn.cursor()
-                    c.execute("UPDATE game_state SET current_round=?, deadline=? WHERE id=1", (new_round, new_date))
+                    c.execute("UPDATE game_state SET current_round=?, deadline=?, subjects=? WHERE id=1", (new_round, new_date, subs_str))
                     conn.commit()
                     st.success("Round Info Updated!")
                     st.rerun()
 
             with t2:
-                st.write("### 👥 All Participants")
+                st.write("### 👥 Participant List")
                 conn = get_connection()
                 all_u = pd.read_sql("SELECT username, password, total_points FROM users", conn)
                 st.dataframe(all_u, use_container_width=True)
