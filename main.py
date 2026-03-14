@@ -82,7 +82,7 @@ if not st.session_state.auth:
             except: st.error("User exists")
 else:
     info = pd.read_sql("SELECT * FROM game_state WHERE id=1", db_conn).iloc[0]
-    page = st.sidebar.radio("Nav", ["Dashboard", "Grade Portal", "Player Stats", "My Squad", "Leaderboard", "Admin"])
+    page = st.sidebar.radio("Nav", ["Dashboard", "Grade Portal", "Player Stats", "My Squad", "Review Teams", "Leaderboard", "Admin"])
     
     if page == "Dashboard":
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
@@ -94,24 +94,14 @@ else:
 
     elif page == "Grade Portal":
         st.header("📝 Student Grade Portal")
-        st.write(f"Showing marks for active subjects: **{info['subjects']}**")
-        
-        # Pull all history and pivot into a student-subject chart
         raw_marks = pd.read_sql("SELECT student, subject, mark FROM score_history", db_conn)
         if not raw_marks.empty:
-            # Pivot the data so subjects become columns
             grade_chart = raw_marks.pivot_table(index='student', columns='subject', values='mark', aggfunc='last')
-            
-            # Filter columns to only show the 4 core + only what's in the current round
             active_list = [s.strip() for s in info['subjects'].split(",")]
             display_cols = [col for col in ["Maths", "English", "Science", "HASS"] if col in active_list and col in grade_chart.columns]
-            
-            if display_cols:
-                st.dataframe(grade_chart[display_cols].fillna("-"), use_container_width=True)
-            else:
-                st.info("No marks recorded yet for the subjects in this round.")
-        else:
-            st.info("The Grade Portal will populate once the Admin adds marks.")
+            if display_cols: st.dataframe(grade_chart[display_cols].fillna("-"), use_container_width=True)
+            else: st.info("No marks for current subjects.")
+        else: st.info("No marks recorded yet.")
 
     elif page == "Player Stats":
         st.header("📊 Student Stats")
@@ -125,16 +115,37 @@ else:
             sel = st.multiselect("Select 5", player_options, max_selections=5)
             s_names = [s.split(" (£")[0] for s in sel]
             cost = sum(player_prices[n] for n in s_names)
-            st.write(f"Budget: £{cost}m / £90m")
+            st.write(f"**Current Spending: £{cost}m / £90m**")
             if len(s_names) == 5 and cost <= 90:
                 cap = st.selectbox("Captain", s_names)
-                if st.button("Save"):
+                if st.button("Save Squad"):
                     db_conn.execute("UPDATE users SET team=?, captain=? WHERE username=?", (", ".join(s_names), cap, st.session_state.user))
                     db_conn.commit()
                     st.rerun()
         with t2:
             if user['team'] != "None":
-                st.markdown(f'<div class="card"><b>Team:</b> {user["team"]}<br><b>Captain:</b> {user["captain"]}</div>', unsafe_allow_html=True)
+                t_names = user['team'].split(", ")
+                t_cost = sum(player_prices[p] for p in t_names)
+                st.markdown(f"""<div class="card">
+                    <b>Team:</b> {user["team"]}<br>
+                    <b>Captain:</b> {user["captain"]}<br><br>
+                    <b>Total Budget Used:</b> £{t_cost}m / £90m<br>
+                    <b>Bank:</b> £{90 - t_cost}m
+                    </div>""", unsafe_allow_html=True)
+            else: st.info("Pick a team first!")
+
+    elif page == "Review Teams":
+        st.header("👀 Review Other Teams")
+        others = pd.read_sql("SELECT username, team, captain FROM users WHERE team != 'None'", db_conn)
+        if not others.empty:
+            for idx, row in others.iterrows():
+                t_names = row['team'].split(", ")
+                t_cost = sum(player_prices[p] for p in t_names)
+                with st.expander(f"Manager: {row['username']}"):
+                    st.write(f"**Squad:** {row['team']}")
+                    st.write(f"**Captain:** {row['captain']}")
+                    st.write(f"**Value:** £{t_cost}m")
+        else: st.info("No managers have locked their teams yet.")
 
     elif page == "Leaderboard":
         lb = pd.read_sql("SELECT username as Manager, total_points as Points FROM users ORDER BY total_points DESC", db_conn)
@@ -150,11 +161,9 @@ else:
                     db_conn.execute("UPDATE game_state SET prev_round=current_round, prev_subjects=subjects, current_round=?, subjects=? WHERE id=1", (nr, ", ".join(ns)))
                     db_conn.commit()
                     st.success("New Round Active!")
-                st.divider()
-                if st.button("⏪ UNDO LAST ROUND CHANGE"):
+                if st.button("⏪ UNDO"):
                     db_conn.execute("UPDATE game_state SET current_round=prev_round, subjects=prev_subjects WHERE id=1")
                     db_conn.commit()
-                    st.warning("Reverted to previous round details.")
                     st.rerun()
             with t2:
                 sb, st_n = st.selectbox("Sub", ["Maths", "English", "HASS", "Science", "Music"]), st.selectbox("Student", [p['name'] for p in MARKET_DATA])
@@ -172,7 +181,7 @@ else:
             with t3:
                 u_df = pd.read_sql("SELECT username, total_points FROM users", db_conn)
                 st.dataframe(u_df)
-                if st.button("Reset All Manager Points"):
+                if st.button("Reset Points"):
                     db_conn.execute("UPDATE users SET total_points = 0")
                     db_conn.commit()
                     st.rerun()
