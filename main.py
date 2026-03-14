@@ -118,8 +118,14 @@ else:
             st.write(f"**Current Spending: £{cost}m / £90m**")
             if len(s_names) == 5 and cost <= 90:
                 cap = st.selectbox("Captain", s_names)
+                # Checkbox only shows if chip is available
+                tc_active = False
+                if user['tc_available'] == 1:
+                    tc_active = st.checkbox("🚀 Use Triple Captain Chip")
+                
                 if st.button("Save Squad"):
-                    db_conn.execute("UPDATE users SET team=?, captain=? WHERE username=?", (", ".join(s_names), cap, st.session_state.user))
+                    db_conn.execute("UPDATE users SET team=?, captain=?, tc_active=? WHERE username=?", 
+                                    (", ".join(s_names), cap, 1 if tc_active else 0, st.session_state.user))
                     db_conn.commit()
                     st.rerun()
         with t2:
@@ -128,7 +134,8 @@ else:
                 t_cost = sum(player_prices[p] for p in t_names)
                 st.markdown(f"""<div class="card">
                     <b>Team:</b> {user["team"]}<br>
-                    <b>Captain:</b> {user["captain"]}<br><br>
+                    <b>Captain:</b> {user["captain"]}<br>
+                    <b>Chip Status:</b> {"Available" if user['tc_available'] == 1 else "Used"}<br><br>
                     <b>Total Budget Used:</b> £{t_cost}m / £90m<br>
                     <b>Bank:</b> £{90 - t_cost}m
                     </div>""", unsafe_allow_html=True)
@@ -172,16 +179,37 @@ else:
                     pts = calculate_fpl_points(mk)
                     db_conn.execute("INSERT INTO score_history (student, subject, mark, points, timestamp) VALUES (?,?,?,?,?)", (st_n, sb, mk, pts, datetime.now().strftime("%H:%M")))
                     c = db_conn.cursor()
-                    for m_n, m_t, m_c in c.execute("SELECT username, team, captain FROM users").fetchall():
+                    for m_n, m_t, m_c, m_tc in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
                         if m_t and st_n in m_t:
-                            mult = 2 if st_n == m_c else 1
+                            mult = 3 if (st_n == m_c and m_tc) else (2 if st_n == m_c else 1)
                             c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (pts * mult, m_n))
+                            # Consume chip if used
+                            if m_tc: c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (m_n,))
                     db_conn.commit()
                     st.success("Points Added!")
             with t3:
-                u_df = pd.read_sql("SELECT username, total_points FROM users", db_conn)
-                st.dataframe(u_df)
-                if st.button("Reset Points"):
-                    db_conn.execute("UPDATE users SET total_points = 0")
-                    db_conn.commit()
-                    st.rerun()
+                st.subheader("Manage Participants")
+                u_df = pd.read_sql("SELECT username, password, total_points, tc_available FROM users", db_conn)
+                st.dataframe(u_df, use_container_width=True)
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    target_user = st.selectbox("Select User (Pass/Chip)", u_df['username'])
+                    new_pass = st.text_input("New Password", type="password")
+                    if st.button("Update Password"):
+                        db_conn.execute("UPDATE users SET password=? WHERE username=?", (new_pass, target_user))
+                        db_conn.commit()
+                        st.success("Updated!")
+                
+                with col2:
+                    if st.button("♻️ RESET TRIPLE CAPTAIN CHIP"):
+                        db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target_user,))
+                        db_conn.commit()
+                        st.success(f"Chip restored for {target_user}")
+                
+                with col3:
+                    kick_user = st.selectbox("Select User to Kick", u_df['username'])
+                    if st.button("🔴 KICK PLAYER"):
+                        db_conn.execute("DELETE FROM users WHERE username=?", (kick_user,))
+                        db_conn.commit()
+                        st.rerun()
