@@ -5,25 +5,30 @@ import sqlite3
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Gate Fantasy", page_icon="⚽", layout="centered")
 
-# --- DATABASE SETUP (Fixed for Stability) ---
+# --- DATABASE SETUP & AUTO-MIGRATION ---
 def init_db():
-    # 'check_same_thread=False' is vital for Streamlit to prevent crashes
     conn = sqlite3.connect('fantasy.db', check_same_thread=False)
     c = conn.cursor()
-    # Ensure tables exist
+    # Create tables
     c.execute('''CREATE TABLE IF NOT EXISTS users 
                  (username TEXT PRIMARY KEY, password TEXT, team TEXT, total_points REAL DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS game_state 
                  (id INTEGER PRIMARY KEY, current_round TEXT, deadline TEXT, subjects TEXT)''')
     
-    # Check if game_state has data, if not, insert default
+    # --- MIGRATION CHECK: This fixes your KeyError ---
+    c.execute("PRAGMA table_info(game_state)")
+    columns = [column[1] for column in c.fetchall()]
+    if 'subjects' not in columns:
+        c.execute("ALTER TABLE game_state ADD COLUMN subjects TEXT DEFAULT 'None'")
+    
+    # Ensure default game state exists
     c.execute("SELECT COUNT(*) FROM game_state")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO game_state (id, current_round, deadline, subjects) VALUES (1, 'Round 1', 'Not Set', 'None')")
+    
     conn.commit()
     return conn
 
-# Global connection object
 db_conn = init_db()
 
 # --- LIGHT THEME STYLING ---
@@ -33,17 +38,12 @@ st.markdown("""
     p, h1, h2, h3, h4, span, label { color: #38003c !important; font-weight: 600; }
     .fpl-header {
         background: #38003c;
-        padding: 20px;
-        border-radius: 10px;
-        border-bottom: 5px solid #00ff87;
-        text-align: center;
-        margin-bottom: 25px;
+        padding: 20px; border-radius: 10px; border-bottom: 5px solid #00ff87;
+        text-align: center; margin-bottom: 25px;
     }
     .stButton>button {
-        background-color: #00ff87 !important;
-        color: #38003c !important;
-        font-weight: bold !important;
-        border: 2px solid #38003c !important;
+        background-color: #00ff87 !important; color: #38003c !important;
+        font-weight: bold !important; border: 2px solid #38003c !important;
         border-radius: 8px !important;
     }
     input { color: black !important; background-color: #f0f2f5 !important; }
@@ -107,7 +107,7 @@ if not st.session_state.authenticated:
         p_sign = st.text_input("Choose Password", type="password")
         if st.button("Sign Up"): signup(u_sign, p_sign)
 else:
-    # Get game info every page load
+    # Get current game info
     info = pd.read_sql("SELECT * FROM game_state WHERE id=1", db_conn).iloc[0]
     
     st.sidebar.markdown(f"**{info['current_round']}**")
@@ -143,8 +143,6 @@ else:
                     c.execute("UPDATE users SET team=? WHERE username=?", (", ".join(selected_names), st.session_state.username))
                     db_conn.commit()
                     st.success("✅ Team Saved!")
-            elif cost > 90:
-                st.error("🚨 Over budget!")
 
     elif page == "Leaderboard":
         st.header("🏆 Leaderboard")
@@ -159,8 +157,8 @@ else:
             with t1:
                 new_round = st.text_input("Round Name", value=info['current_round'])
                 new_date = st.text_input("Deadline", value=info['deadline'])
-                new_subs = st.multiselect("Active Subjects", ["Maths", "English", "HASS", "Science", "Music"], 
-                                         default=info['subjects'].split(", ") if info['subjects'] != "None" else None)
+                current_subs_list = info['subjects'].split(", ") if info['subjects'] != "None" else []
+                new_subs = st.multiselect("Active Subjects", ["Maths", "English", "HASS", "Science", "Music"], default=current_subs_list)
                 if st.button("Update Round Info"):
                     subs_str = ", ".join(new_subs) if new_subs else "None"
                     c = db_conn.cursor()
