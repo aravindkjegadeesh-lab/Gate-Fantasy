@@ -1,51 +1,22 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
 import math
 
-# --- PAGE CONFIG ---
-st.set_page_config(page_title="Gate Fantasy", page_icon="⚽", layout="centered")
+# --- DATABASE SETUP ---
+def init_db():
+    conn = sqlite3.connect('fantasy.db', check_same_thread=False)
+    c = conn.cursor()
+    # Users table
+    c.execute('''CREATE TABLE IF NOT EXISTS users 
+                 (username TEXT PRIMARY KEY, password TEXT, team TEXT, total_points REAL DEFAULT 0)''')
+    # Gameweek config table
+    c.execute('''CREATE TABLE IF NOT EXISTS config 
+                 (key TEXT PRIMARY KEY, value TEXT)''')
+    conn.commit()
+    return conn
 
-# --- CUSTOM CSS FOR THE FPL LOOK ---
-st.markdown("""
-    <style>
-    /* Background and Main Colors */
-    .stApp { background-color: #121212; }
-    
-    /* Header Styling */
-    .fpl-header {
-        background: linear-gradient(90deg, #38003c 0%, #7a00ff 100%);
-        padding: 30px;
-        border-radius: 15px;
-        border-bottom: 5px solid #00ff87;
-        text-align: center;
-        margin-bottom: 30px;
-    }
-    
-    .fpl-title { color: #00ff87; font-size: 42px; font-weight: 800; margin: 0; }
-    .fpl-subtitle { color: white; font-size: 18px; opacity: 0.9; }
-
-    /* Button Styling */
-    .stButton>button {
-        background-color: #00ff87 !important;
-        color: #38003c !important;
-        font-weight: bold !important;
-        border-radius: 8px !important;
-        border: none !important;
-        height: 3em !important;
-        transition: 0.3s !important;
-    }
-    .stButton>button:hover { transform: scale(1.02); opacity: 0.9; }
-
-    /* Card Styling */
-    .player-card {
-        background-color: #1e1e1e;
-        padding: 15px;
-        border-radius: 10px;
-        border: 1px solid #333;
-        margin-bottom: 10px;
-    }
-    </style>
-    """, unsafe_allow_html=True)
+conn = init_db()
 
 # --- PLAYER DATA ---
 MARKET_DATA = [
@@ -64,79 +35,114 @@ MARKET_DATA = [
 ]
 df_market = pd.DataFrame(MARKET_DATA)
 
-# --- APP NAVIGATION ---
-if 'page' not in st.session_state:
-    st.session_state.page = 'Home'
+# --- STYLING ---
+st.markdown("""
+    <style>
+    .stApp { background-color: #121212; }
+    .fpl-header { background: linear-gradient(90deg, #38003c 0%, #7a00ff 100%); padding: 20px; border-radius: 10px; border-bottom: 4px solid #00ff87; text-align: center; }
+    </style>
+    """, unsafe_allow_html=True)
 
-def set_page(page_name):
-    st.session_state.page = page_name
+# --- AUTH LOGIC ---
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.user = None
 
-# Sidebar Navigation
-st.sidebar.markdown("<h2 style='color:#00ff87;'>Gate Fantasy</h2>", unsafe_allow_html=True)
-if st.sidebar.button("🏠 Home Screen"): set_page('Home')
-if st.sidebar.button("🏃 Build My Team"): set_page('Team')
-if st.sidebar.button("🏆 Leaderboard"): set_page('Leader')
-if st.sidebar.button("🔑 Admin Access"): set_page('Admin')
+def login_user(u, p):
+    c = conn.cursor()
+    c.execute("SELECT * FROM users WHERE username=? AND password=?", (u, p))
+    return c.fetchone()
+
+def signup_user(u, p):
+    try:
+        c = conn.cursor()
+        c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (u, p))
+        conn.commit()
+        return True
+    except:
+        return False
+
+# --- SIDEBAR NAVIGATION ---
+st.sidebar.title("⚽ Gate Fantasy")
+
+if not st.session_state.logged_in:
+    page = st.sidebar.radio("Entry", ["Login", "Sign Up"])
+else:
+    page = st.sidebar.radio("Navigation", ["Home", "Build Team", "Leaderboard", "Admin Portal"])
+    if st.sidebar.button("Logout"):
+        st.session_state.logged_in = False
+        st.rerun()
 
 # --- PAGES ---
+if not st.session_state.logged_in:
+    if page == "Login":
+        st.header("Login to Gate Fantasy")
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
+        if st.button("Login"):
+            res = login_user(u, p)
+            if res:
+                st.session_state.logged_in = True
+                st.session_state.user = u
+                st.rerun()
+            else:
+                st.error("Invalid credentials")
 
-if st.session_state.page == 'Home':
-    st.markdown("""
-        <div class="fpl-header">
-            <p class="fpl-title">GATE FANTASY</p>
-            <p class="fpl-subtitle">Season 2025/26 | Every Test Counts</p>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        st.markdown("### 👋 Welcome Manager")
-        manager_name = st.text_input("Enter your name to sign in:", placeholder="e.g. Lucas")
-        if st.button("Get Started"):
-            set_page('Team')
-            st.rerun()
-            
-    with col2:
-        st.markdown("### 📊 Gameweek Status")
-        st.info("**Next Gameweek:** GW 1\n\n**Deadline:** Sunday 18:00")
-        st.success("Registration is currently **OPEN**")
+    elif page == "Sign Up":
+        st.header("Create Account")
+        new_u = st.text_input("Choose Username")
+        new_p = st.text_input("Choose Password", type="password")
+        if st.button("Register"):
+            if signup_user(new_u, new_p):
+                st.success("Account created! Go to Login.")
+            else:
+                st.error("Username already exists.")
 
-elif st.session_state.page == 'Team':
-    st.title("🏃 Build Your Squad")
-    st.markdown("Select **5 players** staying within the **£90m** budget.")
-    
-    selected_names = st.multiselect("Draft your team:", df_market['name'])
-    
-    if selected_names:
-        selected_df = df_market[df_market['name'].isin(selected_names)]
-        total_cost = selected_df['price'].sum()
-        remaining = 90 - total_cost
+else:
+    if page == "Home":
+        st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
+        st.write(f"### Welcome back, Manager **{st.session_state.user}**!")
         
-        c1, c2 = st.columns(2)
-        c1.metric("Budget Remaining", f"£{remaining:.1f}m", delta=remaining, delta_color="normal")
-        c2.metric("Squad Size", f"{len(selected_names)}/5")
+    elif page == "Build Team":
+        st.title("🏃 Build Your Squad")
+        selected = st.multiselect("Pick 5 Players (£90m Budget)", df_market['name'], max_selections=5)
+        
+        if selected:
+            cost = df_market[df_market['name'].isin(selected)]['price'].sum()
+            st.metric("Remaining Budget", f"£{90-cost:.1f}m")
+            if len(selected) == 5 and cost <= 90:
+                if st.button("Save Team"):
+                    c = conn.cursor()
+                    c.execute("UPDATE users SET team=? WHERE username=?", (",".join(selected), st.session_state.user))
+                    conn.commit()
+                    st.success("Team Saved!")
 
-        if len(selected_names) == 5 and remaining >= 0:
-            if st.button("🚀 SUBMIT TEAM"):
-                st.balloons()
-                st.success("Team Locked In!")
-        elif remaining < 0:
-            st.error("Over budget! You need to release some expensive players.")
+    elif page == "Leaderboard":
+        st.title("🏆 Leaderboard")
+        lb_df = pd.read_sql("SELECT username, total_points FROM users ORDER BY total_points DESC", conn)
+        st.table(lb_df)
 
-elif st.session_state.page == 'Leader':
-    st.title("🏆 Global Standings")
-    # Placeholder for leaderboard
-    leader_df = pd.DataFrame({
-        "Rank": [1, 2, 3],
-        "Manager": ["Lucas Lau", "Geonhee", "Aravind"],
-        "Points": [184.5, 162.1, 145.0]
-    })
-    st.table(leader_df)
+    elif page == "Admin Portal":
+        st.title("🔑 Admin Control")
+        admin_pw = st.text_input("Admin Key", type="password")
+        if admin_pw == "gate2026":
+            tab1, tab2 = st.tabs(["User Management", "Gameweek Settings"])
+            
+            with tab1:
+                st.write("### All Registered Participants")
+                users_all = pd.read_sql("SELECT username, password FROM users", conn)
+                st.dataframe(users_all)
+                
+                target_user = st.selectbox("Select user to reset password", users_all['username'])
+                new_pass = st.text_input("New Password for user")
+                if st.button("Update Password"):
+                    c = conn.cursor()
+                    c.execute("UPDATE users SET password=? WHERE username=?", (new_pass, target_user))
+                    conn.commit()
+                    st.success(f"Password for {target_user} updated!")
 
-elif st.session_state.page == 'Admin':
-    st.title("🔑 Admin Panel")
-    pw = st.text_input("Enter Admin Password", type="password")
-    if pw == "gate2026":
-        st.success("Access Granted.")
-        st.write("Update scores for Maths, HASS, and English below.")
-        # Score update logic would go here
+            with tab2:
+                st.write("### Configure Round")
+                subjects = st.multiselect("Which subjects count this week?", ["Maths", "English", "HASS", "Science"])
+                if st.button("Set Round"):
+                    st.success(f"Round updated with {subjects}")
