@@ -17,9 +17,9 @@ def init_db():
                   tc_available INTEGER DEFAULT 1, tc_active INTEGER DEFAULT 0, total_points REAL DEFAULT 0)''')
     
     c.execute('''CREATE TABLE IF NOT EXISTS game_state 
-                 (id INTEGER PRIMARY KEY, current_round TEXT, deadline TEXT, subjects TEXT)''')
+                 (id INTEGER PRIMARY KEY, current_round TEXT, deadline TEXT, subjects TEXT, last_update TEXT)''')
     
-    # 2. Migration: Add missing columns if they don't exist
+    # 2. Migration: Add missing columns
     c.execute("PRAGMA table_info(users)")
     user_cols = [col[1] for col in c.fetchall()]
     for col, dtype in [('captain', 'TEXT DEFAULT "None"'), ('tc_available', 'INTEGER DEFAULT 1'), ('tc_active', 'INTEGER DEFAULT 0')]:
@@ -30,10 +30,12 @@ def init_db():
     state_cols = [col[1] for col in c.fetchall()]
     if 'subjects' not in state_cols:
         c.execute("ALTER TABLE game_state ADD COLUMN subjects TEXT DEFAULT 'None'")
+    if 'last_update' not in state_cols:
+        c.execute("ALTER TABLE game_state ADD COLUMN last_update TEXT DEFAULT 'No scores yet'")
 
     c.execute("SELECT COUNT(*) FROM game_state")
     if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO game_state (id, current_round, deadline, subjects) VALUES (1, 'Round 1', 'Not Set', 'None')")
+        c.execute("INSERT INTO game_state (id, current_round, deadline, subjects, last_update) VALUES (1, 'Round 1', 'Not Set', 'None', 'No scores yet')")
     
     conn.commit()
     return conn
@@ -52,6 +54,7 @@ st.markdown("""
     p, h1, h2, h3, h4, span, label { color: #38003c !important; font-weight: 600; }
     .fpl-header { background: #38003c; padding: 20px; border-radius: 10px; border-bottom: 5px solid #00ff87; text-align: center; margin-bottom: 25px; }
     .stButton>button { background-color: #00ff87 !important; color: #38003c !important; font-weight: bold !important; border-radius: 8px !important; }
+    .score-card { background: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #00ff87; margin-top: 10px; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -73,12 +76,12 @@ MARKET_DATA = [
 player_names = [p['name'] for p in MARKET_DATA]
 player_options = [f"{p['name']} (£{p['price']}m)" for p in MARKET_DATA]
 
-# --- AUTH STATE ---
+# --- SESSION ---
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
     st.session_state.username = None
 
-# --- AUTH UI ---
+# --- AUTH ---
 if not st.session_state.authenticated:
     st.markdown('<div class="fpl-header"><h1 style="color:#00ff87; margin:0;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
     t1, t2 = st.tabs(["Login", "Create Account"])
@@ -108,8 +111,12 @@ else:
 
     if page == "Dashboard":
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87; margin:0;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
-        st.metric("Current Round", info['current_round'])
-        st.info(f"Subject(s) in play: {info['subjects']}")
+        col1, col2 = st.columns(2)
+        col1.metric("Current Round", info['current_round'])
+        col2.info(f"Subjects: {info['subjects']}")
+        
+        st.markdown("### 📢 Recent Score Update")
+        st.markdown(f'<div class="score-card">{info["last_update"]}</div>', unsafe_allow_html=True)
 
     elif page == "My Squad":
         st.header("🏃 Manage Squad")
@@ -120,8 +127,7 @@ else:
             cap = st.selectbox("Choose Captain (2x Points)", selected_names)
             tc_active = st.checkbox("🚀 Triple Captain (3x Points)") if user['tc_available'] == 1 else False
             if st.button("Lock Squad"):
-                db_conn.execute("UPDATE users SET team=?, captain=?, tc_active=? WHERE username=?", 
-                                (", ".join(selected_names), cap, 1 if tc_active else 0, st.session_state.username))
+                db_conn.execute("UPDATE users SET team=?, captain=?, tc_active=? WHERE username=?", (", ".join(selected_names), cap, 1 if tc_active else 0, st.session_state.username))
                 db_conn.commit()
                 st.success("Squad confirmed!")
 
@@ -143,7 +149,7 @@ else:
                 st.divider()
                 new_r_name = st.text_input("New Round Name (To Reset)")
                 if st.button("START NEW ROUND"):
-                    db_conn.execute("UPDATE game_state SET current_round=?, subjects='None' WHERE id=1", (new_r_name,))
+                    db_conn.execute("UPDATE game_state SET current_round=?, subjects='None', last_update='New round started!' WHERE id=1", (new_r_name,))
                     db_conn.execute("UPDATE users SET tc_active=0")
                     db_conn.commit()
                     st.success("Round Refreshed!")
@@ -154,6 +160,10 @@ else:
                 mark = st.number_input(f"Mark for {student} ({sub_pick})", 0.0, 100.0)
                 pts = calculate_fpl_points(mark)
                 if st.button("Add Points"):
+                    # Update the "Recent Update" section on Dashboard
+                    update_text = f"**{student}** scored **{mark}%** in **{sub_pick}** (+{pts} base points)"
+                    db_conn.execute("UPDATE game_state SET last_update=? WHERE id=1", (update_text,))
+                    
                     c = db_conn.cursor()
                     all_u = c.execute("SELECT username, team, captain, tc_active FROM users").fetchall()
                     for m_name, m_team, m_cap, m_tc_active in all_u:
@@ -162,11 +172,10 @@ else:
                             c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (pts * mult, m_name))
                             if m_tc_active: c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (m_name,))
                     db_conn.commit()
-                    st.success(f"Scores updated for {student}!")
+                    st.success(f"Scores updated! Players will see this on their Dashboard.")
             with t3:
                 all_u_df = pd.read_sql("SELECT username, password, total_points, tc_available FROM users", db_conn)
                 st.dataframe(all_u_df, use_container_width=True)
-                
                 col_a, col_b = st.columns(2)
                 with col_a:
                     u_chip = st.selectbox("Reset Triple Captain for:", all_u_df['username'])
@@ -176,7 +185,7 @@ else:
                         st.success(f"TC Chip restored for {u_chip}")
                 with col_b:
                     u_del = st.selectbox("Delete Manager:", all_u_df['username'])
-                    if st.button("DELETE MANAGER"):
+                    if st.button("Delete Manager"):
                         db_conn.execute("DELETE FROM users WHERE username=?", (u_del,))
                         db_conn.commit()
                         st.rerun()
