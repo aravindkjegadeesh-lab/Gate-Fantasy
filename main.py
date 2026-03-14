@@ -19,7 +19,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS score_history 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, student TEXT, subject TEXT, mark REAL, points REAL, timestamp TEXT)''')
     
-    # Ensure all columns exist to prevent the KeyErrors seen in your screenshots
     c.execute("PRAGMA table_info(game_state)")
     cols = [col[1] for col in c.fetchall()]
     if 'prev_round' not in cols: c.execute("ALTER TABLE game_state ADD COLUMN prev_round TEXT DEFAULT 'None'")
@@ -83,7 +82,7 @@ if not st.session_state.auth:
             except: st.error("User exists")
 else:
     info = pd.read_sql("SELECT * FROM game_state WHERE id=1", db_conn).iloc[0]
-    page = st.sidebar.radio("Nav", ["Dashboard", "Player Stats", "My Squad", "Leaderboard", "Admin"])
+    page = st.sidebar.radio("Nav", ["Dashboard", "Grade Portal", "Player Stats", "My Squad", "Leaderboard", "Admin"])
     
     if page == "Dashboard":
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
@@ -92,6 +91,27 @@ else:
         st.markdown("---")
         hist = pd.read_sql("SELECT student, subject, mark, points FROM score_history ORDER BY id DESC LIMIT 5", db_conn)
         if not hist.empty: st.table(hist)
+
+    elif page == "Grade Portal":
+        st.header("📝 Student Grade Portal")
+        st.write(f"Showing marks for active subjects: **{info['subjects']}**")
+        
+        # Pull all history and pivot into a student-subject chart
+        raw_marks = pd.read_sql("SELECT student, subject, mark FROM score_history", db_conn)
+        if not raw_marks.empty:
+            # Pivot the data so subjects become columns
+            grade_chart = raw_marks.pivot_table(index='student', columns='subject', values='mark', aggfunc='last')
+            
+            # Filter columns to only show the 4 core + only what's in the current round
+            active_list = [s.strip() for s in info['subjects'].split(",")]
+            display_cols = [col for col in ["Maths", "English", "Science", "HASS"] if col in active_list and col in grade_chart.columns]
+            
+            if display_cols:
+                st.dataframe(grade_chart[display_cols].fillna("-"), use_container_width=True)
+            else:
+                st.info("No marks recorded yet for the subjects in this round.")
+        else:
+            st.info("The Grade Portal will populate once the Admin adds marks.")
 
     elif page == "Player Stats":
         st.header("📊 Student Stats")
@@ -114,7 +134,6 @@ else:
                     st.rerun()
         with t2:
             if user['team'] != "None":
-                # Fixed formatting here to prevent TypeError
                 st.markdown(f'<div class="card"><b>Team:</b> {user["team"]}<br><b>Captain:</b> {user["captain"]}</div>', unsafe_allow_html=True)
 
     elif page == "Leaderboard":
@@ -125,11 +144,9 @@ else:
         if st.text_input("Admin Key", type="password") == "gate2026":
             t1, t2, t3 = st.tabs(["Add Round", "Scoring", "User Tools"])
             with t1:
-                st.subheader("Create New Round")
                 nr = st.text_input("New Round Name")
                 ns = st.multiselect("Select Round Subjects", ["Maths", "English", "HASS", "Science", "Music"])
                 if st.button("START ROUND"):
-                    # Save current as 'previous' before updating for Undo
                     db_conn.execute("UPDATE game_state SET prev_round=current_round, prev_subjects=subjects, current_round=?, subjects=? WHERE id=1", (nr, ", ".join(ns)))
                     db_conn.commit()
                     st.success("New Round Active!")
@@ -140,12 +157,11 @@ else:
                     st.warning("Reverted to previous round details.")
                     st.rerun()
             with t2:
-                sb, st_n = st.selectbox("Sub", ["Maths", "English", "HASS", "Science"]), st.selectbox("Student", [p['name'] for p in MARKET_DATA])
+                sb, st_n = st.selectbox("Sub", ["Maths", "English", "HASS", "Science", "Music"]), st.selectbox("Student", [p['name'] for p in MARKET_DATA])
                 mk = st.number_input("Mark", 0.0, 100.0)
                 if st.button("Apply"):
                     pts = calculate_fpl_points(mk)
-                    db_conn.execute("INSERT INTO score_history (student, subject, mark, points, timestamp) VALUES (?,?,?,?,?)", (st_n, sb, mk, pts, "Now"))
-                    # Point logic remains unchanged
+                    db_conn.execute("INSERT INTO score_history (student, subject, mark, points, timestamp) VALUES (?,?,?,?,?)", (st_n, sb, mk, pts, datetime.now().strftime("%H:%M")))
                     c = db_conn.cursor()
                     for m_n, m_t, m_c in c.execute("SELECT username, team, captain FROM users").fetchall():
                         if m_t and st_n in m_t:
