@@ -57,6 +57,15 @@ player_options = [f"{p['name']} (£{p['price']}m)" for p in MARKET_DATA]
 # --- STYLE ---
 st.markdown("""<style>
     .stApp { background-color: #FFFFFF; }
+    /* Darker Login/Sign-up text */
+    div[data-baseweb="tab-panel"] p, 
+    div[data-baseweb="tab-panel"] label, 
+    div[data-baseweb="tab-panel"] span { 
+        color: #000000 !important; 
+        font-weight: 600 !important; 
+    }
+    input { color: #000000 !important; }
+    
     .fpl-header { background: #38003c; padding: 20px; border-radius: 10px; border-bottom: 5px solid #00ff87; text-align: center; margin-bottom: 25px; }
     .card { background: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #38003c; margin-bottom: 10px; color: #38003c; }
     .rule-box { background: #fff3cd; padding: 10px; border-radius: 5px; border: 1px solid #ffeeba; color: #856404; font-size: 0.9em; margin-bottom: 15px; }
@@ -68,14 +77,16 @@ if not st.session_state.auth:
     st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
     t1, t2 = st.tabs(["Login", "Sign Up"])
     with t1:
-        u, p = st.text_input("User"), st.text_input("Pass", type="password")
+        u = st.text_input("Username", key="login_u")
+        p = st.text_input("Password", type="password", key="login_p")
         if st.button("Log In"):
             res = db_conn.execute("SELECT * FROM users WHERE username=? AND password=?", (u, p)).fetchone()
             if res:
                 st.session_state.auth, st.session_state.user = True, u
                 st.rerun()
     with t2:
-        nu, np = st.text_input("New User"), st.text_input("New Pass", type="password")
+        nu = st.text_input("New Username", key="signup_u")
+        np = st.text_input("New Password", type="password", key="signup_p")
         if st.button("Register"):
             try:
                 db_conn.execute("INSERT INTO users (username, password, team, captain) VALUES (?, ?, 'None', 'None')", (nu, np))
@@ -193,26 +204,19 @@ else:
                 st.subheader("Manage Participants")
                 u_df = pd.read_sql("SELECT username, password, total_points FROM users", db_conn)
                 st.dataframe(u_df, use_container_width=True)
-                
-                target = st.selectbox("Select User to Modify", u_df['username'])
+                target = st.selectbox("Select User", u_df['username'])
                 col_pass, col_kick = st.columns(2)
-                
                 with col_pass:
                     new_p = st.text_input("Set New Password", type="password")
                     if st.button("Update Password"):
                         db_conn.execute("UPDATE users SET password=? WHERE username=?", (new_p, target))
                         db_conn.commit()
-                        st.success("Updated!")
-
                 with col_kick:
-                    if st.button("🔴 KICK PLAYER FROM GAME"):
+                    if st.button("🔴 KICK PLAYER"):
                         db_conn.execute("DELETE FROM users WHERE username=?", (target,))
                         db_conn.commit()
-                        st.warning(f"User {target} has been removed.")
                         st.rerun()
-                
                 st.divider()
                 if st.button("Restore TC Chip for User"):
                     db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target,))
                     db_conn.commit()
-                    st.success("Chip restored!")
