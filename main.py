@@ -57,12 +57,10 @@ player_options = [f"{p['name']} (£{p['price']}m)" for p in MARKET_DATA]
 # --- STYLE ---
 st.markdown("""<style>
     .stApp { background-color: #FFFFFF; }
-    /* Darker Login/Sign-up text */
-    div[data-baseweb="tab-panel"] p, 
-    div[data-baseweb="tab-panel"] label, 
-    div[data-baseweb="tab-panel"] span { 
-        color: #000000 !important; 
-        font-weight: 600 !important; 
+    /* Darker Login/Sign-up text targets */
+    .stTextInput label p, .stButton button p { 
+        color: #111111 !important; 
+        font-weight: bold !important; 
     }
     input { color: #000000 !important; }
     
@@ -77,21 +75,23 @@ if not st.session_state.auth:
     st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
     t1, t2 = st.tabs(["Login", "Sign Up"])
     with t1:
-        u = st.text_input("Username", key="login_u")
-        p = st.text_input("Password", type="password", key="login_p")
+        u = st.text_input("User")
+        p = st.text_input("Pass", type="password")
         if st.button("Log In"):
             res = db_conn.execute("SELECT * FROM users WHERE username=? AND password=?", (u, p)).fetchone()
             if res:
                 st.session_state.auth, st.session_state.user = True, u
                 st.rerun()
+            else:
+                st.error("Invalid Username or Password")
     with t2:
-        nu = st.text_input("New Username", key="signup_u")
-        np = st.text_input("New Password", type="password", key="signup_p")
+        nu = st.text_input("New User")
+        np = st.text_input("New Pass", type="password")
         if st.button("Register"):
             try:
                 db_conn.execute("INSERT INTO users (username, password, team, captain) VALUES (?, ?, 'None', 'None')", (nu, np))
                 db_conn.commit()
-                st.success("Success!")
+                st.success("Success! Please log in.")
             except: st.error("User exists")
 else:
     info = pd.read_sql("SELECT * FROM game_state WHERE id=1", db_conn).iloc[0]
