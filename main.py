@@ -57,12 +57,9 @@ player_options = [f"{p['name']} (£{p['price']}m)" for p in MARKET_DATA]
 # --- STYLE ---
 st.markdown("""<style>
     .stApp { background-color: #FFFFFF; }
-    /* Darker Login/Sign-up text targets */
-    .stTextInput label p, .stButton button p { 
-        color: #111111 !important; 
-        font-weight: bold !important; 
-    }
-    input { color: #000000 !important; }
+    /* Force high visibility for all text inputs and labels */
+    label, p, .stMarkdown { color: #000000 !important; font-weight: 700 !important; }
+    input { color: #000000 !important; background-color: #f9f9f9 !important; border: 2px solid #38003c !important; }
     
     .fpl-header { background: #38003c; padding: 20px; border-radius: 10px; border-bottom: 5px solid #00ff87; text-align: center; margin-bottom: 25px; }
     .card { background: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #38003c; margin-bottom: 10px; color: #38003c; }
@@ -75,24 +72,27 @@ if not st.session_state.auth:
     st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
     t1, t2 = st.tabs(["Login", "Sign Up"])
     with t1:
-        u = st.text_input("User")
-        p = st.text_input("Pass", type="password")
+        # Simple inputs without complex keys to ensure reliability
+        u = st.text_input("Username")
+        p = st.text_input("Password", type="password")
         if st.button("Log In"):
-            res = db_conn.execute("SELECT * FROM users WHERE username=? AND password=?", (u, p)).fetchone()
-            if res:
-                st.session_state.auth, st.session_state.user = True, u
+            user_data = db_conn.execute("SELECT * FROM users WHERE username=? AND password=?", (u, p)).fetchone()
+            if user_data:
+                st.session_state.auth = True
+                st.session_state.user = u
                 st.rerun()
             else:
-                st.error("Invalid Username or Password")
+                st.error("Incorrect details. Please check your spelling.")
     with t2:
-        nu = st.text_input("New User")
-        np = st.text_input("New Pass", type="password")
-        if st.button("Register"):
+        nu = st.text_input("Choose Username")
+        np = st.text_input("Choose Password", type="password")
+        if st.button("Create Account"):
             try:
                 db_conn.execute("INSERT INTO users (username, password, team, captain) VALUES (?, ?, 'None', 'None')", (nu, np))
                 db_conn.commit()
-                st.success("Success! Please log in.")
-            except: st.error("User exists")
+                st.success("Account created! Now go to the Login tab.")
+            except: 
+                st.error("That username is taken.")
 else:
     info = pd.read_sql("SELECT * FROM game_state WHERE id=1", db_conn).iloc[0]
     page = st.sidebar.radio("Nav", ["Dashboard", "Round History", "Grade Portal", "Player Stats", "My Squad", "Review Teams", "Leaderboard", "Admin"])
@@ -211,6 +211,7 @@ else:
                     if st.button("Update Password"):
                         db_conn.execute("UPDATE users SET password=? WHERE username=?", (new_p, target))
                         db_conn.commit()
+                        st.success("Password Updated")
                 with col_kick:
                     if st.button("🔴 KICK PLAYER"):
                         db_conn.execute("DELETE FROM users WHERE username=?", (target,))
