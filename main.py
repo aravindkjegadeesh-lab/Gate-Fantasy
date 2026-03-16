@@ -160,7 +160,7 @@ else:
         st.dataframe(lb, use_container_width=True, hide_index=True)
 
     elif page == "Admin":
-        if st.text_input("Admin Key", type="password") == "gate2026":
+        if st.text_input("Admin Key", type="password") == "vinodbox43":
             t1, t2, t3 = st.tabs(["Add Round", "Scoring", "User Tools"])
             with t1:
                 nr = st.text_input("Round Name")
