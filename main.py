@@ -35,11 +35,9 @@ db_conn = init_db()
 # SCORING LOGIC (Exact Formula with Negative Capability)
 def calculate_fpl_points(mark):
     diff = mark - 70
-    # Using the exact formula: 4 * (mark - 70)^1.2
     if diff >= 0:
         return 4 * math.pow(diff, 1.2)
     else:
-        # Exact negative equivalent
         return -4 * math.pow(abs(diff), 1.2)
 
 # MARKET DATA
@@ -101,7 +99,6 @@ else:
     info = pd.read_sql("SELECT * FROM game_state WHERE id=1", db_conn).iloc[0]
     page = st.sidebar.radio("Nav", ["Dashboard", "Round History", "Grade Portal", "Player Stats", "My Squad", "Review Teams", "Leaderboard", "Admin"])
     
-    # --- DASHBOARD & PAGES (Core logic preserved) ---
     if page == "Dashboard":
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
         st.metric("Active Round", info['current_round'])
@@ -158,9 +155,8 @@ else:
                 with st.expander(row['username']): st.write(f"**Team:** {row['team']}")
 
     elif page == "Leaderboard":
-        st.header("🏆 Official Standings")
+        st.header("🏆 Standings")
         lb = pd.read_sql("SELECT username as Manager, total_points as Points FROM users ORDER BY total_points DESC", db_conn)
-        # Displaying with precision
         st.dataframe(lb, use_container_width=True, hide_index=True)
 
     elif page == "Admin":
@@ -178,21 +174,31 @@ else:
                 st_n = st.selectbox("Student", [p['name'] for p in MARKET_DATA])
                 mk = st.number_input("Mark", 0.0, 100.0)
                 if st.button("Apply"):
-                    # CALCULATION: Exact Formula
+                    # CALCULATION: Exact Formula (includes negative capability)
                     pts = calculate_fpl_points(mk)
                     db_conn.execute("INSERT INTO score_history (round_name, student, subject, mark, points, timestamp) VALUES (?,?,?,?,?,?)", (info['current_round'], st_n, sb, mk, pts, datetime.now().strftime("%H:%M")))
                     
-                    # Apply Exact Formula value to teams
+                    # POINT DISTRIBUTION: Applying Captain (x2) and Triple Captain (x3)
                     c = db_conn.cursor()
                     for m_n, m_t, m_c, m_tc in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
                         if m_t and st_n in m_t:
-                            # Apply Captain/TC Multipliers to the EXACT formula value
-                            mult = 3 if (st_n == m_c and m_tc) else (2 if st_n == m_c else 1)
+                            # MULTIPLIER LOGIC
+                            if st_n == m_c:
+                                if m_tc == 1:
+                                    mult = 3  # Triple Captain
+                                else:
+                                    mult = 2  # Standard Captain
+                            else:
+                                mult = 1 # Normal Player
+                                
                             exact_gain = pts * mult
                             c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (exact_gain, m_n))
-                            if m_tc: c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (m_n,))
+                            
+                            # Burn the Triple Captain chip if it was active
+                            if m_tc == 1:
+                                c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (m_n,))
                     db_conn.commit()
-                    st.success(f"Added {round(pts, 2)} points to teams!")
+                    st.success(f"Added {round(pts * mult, 2)} points to teams using {mult}x multiplier!")
             with t3:
                 u_df = pd.read_sql("SELECT username, total_points FROM users", db_conn)
                 st.dataframe(u_df, use_container_width=True)
@@ -201,6 +207,7 @@ else:
                     db_conn.execute("DELETE FROM users WHERE username=?", (target,))
                     db_conn.commit()
                     st.rerun()
-                if st.button("Restore TC"):
-                    db_conn.execute("UPDATE users SET tc_available=1 WHERE username=?", (target,))
+                if st.button("Restore TC Chip"):
+                    db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target,))
                     db_conn.commit()
+                    st.success("Chip Restored!")
