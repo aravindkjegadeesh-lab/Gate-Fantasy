@@ -145,8 +145,7 @@ else:
             t1, t2, t3, t4 = st.tabs(["Set Round", "Apply/Edit Score", "User Tools", "Nuclear Reset"])
             
             with t1:
-                nr = st.text_input("Round Name")
-                ns = st.text_input("Active Exams")
+                nr, ns = st.text_input("Round Name"), st.text_input("Active Exams")
                 if st.button("Update Season State"):
                     db_conn.execute("UPDATE game_state SET current_round=?, subjects=?", (nr, ns))
                     db_conn.commit()
@@ -159,28 +158,37 @@ else:
                 mk = st.number_input("Mark", 0.0, 100.0)
                 if st.button("Apply Score"):
                     new_pts = calculate_fpl_points(mk)
+                    
+                    # 1. UNDO logic (Check if exists)
                     existing = db_conn.execute("SELECT points FROM score_history WHERE student=? AND subject=? AND round_name=?", (st_n, sub_n, info['current_round'])).fetchone()
                     if existing:
                         old_pts = existing[0]
                         c = db_conn.cursor()
                         for u_n, u_t, u_c, u_tc in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
                             if u_t and st_n in u_t:
-                                m = 3 if (st_n == u_c and u_tc) else (2 if st_n == u_c else 1)
+                                m = 3 if (st_n == u_c and u_tc == 1) else (2 if st_n == u_c else 1)
                                 c.execute("UPDATE users SET total_points = total_points - ? WHERE username=?", (old_pts * m, u_n))
                         db_conn.execute("DELETE FROM score_history WHERE student=? AND subject=? AND round_name=?", (st_n, sub_n, info['current_round']))
                     
+                    # 2. APPLY logic (Fixed x3 logic)
                     db_conn.execute("INSERT INTO score_history (round_name, student, subject, mark, points) VALUES (?,?,?,?,?)", (info['current_round'], st_n, sub_n, mk, new_pts))
                     c = db_conn.cursor()
                     for u_n, u_t, u_c, u_tc in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
                         if u_t and st_n in u_t:
-                            m = 3 if (st_n == u_c and u_tc) else (2 if st_n == u_c else 1)
-                            c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (new_pts * m, u_n))
-                            if u_tc == 1: c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (u_n,))
+                            # CRITICAL FIX: Ensure tc_active is checked properly
+                            multiplier = 1
+                            if st_n == u_c:
+                                multiplier = 3 if u_tc == 1 else 2
+                                
+                            c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (new_pts * multiplier, u_n))
+                            
+                            # Burn chip after usage
+                            if u_tc == 1 and st_n == u_c:
+                                c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (u_n,))
                     db_conn.commit()
-                    st.success(f"Score updated for {st_n}!")
+                    st.success(f"Score applied! Multipliers calculated for all squads.")
 
             with t3:
-                st.subheader("Manage Participants")
                 u_df = pd.read_sql("SELECT username, password, total_points, tc_available, tc_active FROM users", db_conn)
                 st.dataframe(u_df, use_container_width=True)
                 target = st.selectbox("Select User", u_df['username'].tolist() if not u_df.empty else [])
@@ -192,6 +200,7 @@ else:
                 if c2.button("Restore TC"):
                     db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target,))
                     db_conn.commit()
+                    st.success("TC Restored")
                 if c3.button("🔴 KICK"):
                     db_conn.execute("DELETE FROM users WHERE username=?", (target,))
                     db_conn.commit()
