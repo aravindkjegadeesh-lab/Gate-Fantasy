@@ -32,7 +32,7 @@ def init_db():
 
 db_conn = init_db()
 
-# SCORING LOGIC (Exact Formula with Negative Capability)
+# SCORING LOGIC
 def calculate_fpl_points(mark):
     diff = mark - 70
     if diff >= 0:
@@ -58,7 +58,7 @@ MARKET_DATA = [
 player_prices = {p['name']: p['price'] for p in MARKET_DATA}
 player_options = [f"{p['name']} (£{p['price']}m)" for p in MARKET_DATA]
 
-# --- STYLE (High Visibility) ---
+# --- STYLE ---
 st.markdown("""<style>
     .stApp { background-color: #FFFFFF; }
     label, p, .stMarkdown { color: #000000 !important; font-weight: 700 !important; }
@@ -69,13 +69,7 @@ st.markdown("""<style>
 
 if 'auth' not in st.session_state: st.session_state.auth = False
 if 'user' not in st.session_state: st.session_state.user = None
-
-def attempt_login(u, p):
-    res = db_conn.execute("SELECT * FROM users WHERE username=? AND password=?", (u, p)).fetchone()
-    if res:
-        st.session_state.auth = True
-        st.session_state.user = u
-    else: st.error("Login failed.")
+if 'admin_auth' not in st.session_state: st.session_state.admin_auth = False
 
 if not st.session_state.auth:
     st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
@@ -84,16 +78,18 @@ if not st.session_state.auth:
         u_in = st.text_input("Username", key="login_u")
         p_in = st.text_input("Password", type="password", key="login_p")
         if st.button("Log In", type="primary"):
-            attempt_login(u_in, p_in)
-            if st.session_state.auth: st.rerun()
+            res = db_conn.execute("SELECT * FROM users WHERE username=? AND password=?", (u_in, p_in)).fetchone()
+            if res:
+                st.session_state.auth, st.session_state.user = True, u_in
+                st.rerun()
+            else: st.error("Login failed.")
     with t2:
-        nu = st.text_input("New User", key="reg_u")
-        np = st.text_input("New Pass", type="password", key="reg_p")
+        nu, np = st.text_input("New User", key="reg_u"), st.text_input("New Pass", type="password", key="reg_p")
         if st.button("Register"):
             try:
                 db_conn.execute("INSERT INTO users (username, password, team, captain) VALUES (?, ?, 'None', 'None')", (nu, np))
                 db_conn.commit()
-                st.success("Registered! Please Log In.")
+                st.success("Registered!")
             except: st.error("User exists.")
 else:
     info = pd.read_sql("SELECT * FROM game_state WHERE id=1", db_conn).iloc[0]
@@ -103,7 +99,6 @@ else:
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
         st.metric("Active Round", info['current_round'])
         st.info(f"📍 Subjects: {info['subjects']}")
-        st.markdown("---")
         hist = pd.read_sql("SELECT student, subject, mark, points FROM score_history WHERE round_name=? ORDER BY id DESC LIMIT 5", db_conn, params=(info['current_round'],))
         if not hist.empty: st.table(hist)
 
@@ -112,20 +107,16 @@ else:
         all_rounds = pd.read_sql("SELECT DISTINCT round_name FROM score_history", db_conn)
         if not all_rounds.empty:
             search_round = st.selectbox("Select a Round", all_rounds['round_name'].tolist()[::-1])
-            round_data = pd.read_sql("SELECT student, subject, mark, points FROM score_history WHERE round_name=?", db_conn, params=(search_round,))
-            st.dataframe(round_data, use_container_width=True, hide_index=True)
+            st.dataframe(pd.read_sql("SELECT student, subject, mark, points FROM score_history WHERE round_name=?", db_conn, params=(search_round,)), use_container_width=True, hide_index=True)
 
     elif page == "Grade Portal":
         st.header("📝 Grade Portal")
         raw_marks = pd.read_sql("SELECT student, subject, mark FROM score_history", db_conn)
-        if not raw_marks.empty:
-            grade_chart = raw_marks.pivot_table(index='student', columns='subject', values='mark', aggfunc='last')
-            st.dataframe(grade_chart.fillna("-"), use_container_width=True)
+        if not raw_marks.empty: st.dataframe(raw_marks.pivot_table(index='student', columns='subject', values='mark', aggfunc='last').fillna("-"), use_container_width=True)
 
     elif page == "Player Stats":
-        st.header("📊 Total Student Points")
-        stats = pd.read_sql("SELECT student as Name, SUM(points) as Total_Points FROM score_history GROUP BY student ORDER BY Total_Points DESC", db_conn)
-        st.dataframe(stats, use_container_width=True, hide_index=True)
+        st.header("📊 Student Stats")
+        st.dataframe(pd.read_sql("SELECT student as Name, SUM(points) as Total_Points FROM score_history GROUP BY student ORDER BY Total_Points DESC", db_conn), use_container_width=True, hide_index=True)
 
     elif page == "My Squad":
         user = pd.read_sql("SELECT * FROM users WHERE username=?", db_conn, params=(st.session_state.user,)).iloc[0]
@@ -134,71 +125,68 @@ else:
             sel = st.multiselect("Select 5 Players", player_options, max_selections=5)
             s_names = [s.split(" (£")[0] for s in sel]
             cost = sum(player_prices[n] for n in s_names)
-            st.write(f"**Total Cost: £{cost}m / £90m**")
+            st.write(f"**Cost: £{cost}m / £90m**")
             if len(s_names) == 5 and cost <= 90:
                 cap = st.selectbox("Captain", s_names)
-                tc_active = False
-                if user['tc_available'] == 1: tc_active = st.checkbox("🚀 Triple Captain")
+                tc_active = st.checkbox("🚀 Triple Captain") if user['tc_available'] == 1 else False
                 if st.button("Save Squad"):
                     db_conn.execute("UPDATE users SET team=?, captain=?, tc_active=? WHERE username=?", (", ".join(s_names), cap, 1 if tc_active else 0, st.session_state.user))
                     db_conn.commit()
-                    st.success("Squad Locked!")
+                    st.success("Locked!")
         with t2:
-            if user['team'] != "None":
-                st.markdown(f"""<div class="card"><b>Team:</b> {user["team"]}<br><b>Captain:</b> {user["captain"]}</div>""", unsafe_allow_html=True)
+            if user['team'] != "None": st.markdown(f"""<div class="card"><b>Team:</b> {user["team"]}<br><b>Captain:</b> {user["captain"]}</div>""", unsafe_allow_html=True)
 
     elif page == "Review Teams":
-        st.header("👀 Review Teams")
         others = pd.read_sql("SELECT username, team, captain FROM users WHERE team != 'None'", db_conn)
-        if not others.empty:
-            for idx, row in others.iterrows():
-                with st.expander(row['username']): st.write(f"**Team:** {row['team']}")
+        for idx, row in others.iterrows():
+            with st.expander(row['username']): st.write(f"**Team:** {row['team']}")
 
     elif page == "Leaderboard":
         st.header("🏆 Standings")
-        lb = pd.read_sql("SELECT username as Manager, total_points as Points FROM users ORDER BY total_points DESC", db_conn)
-        st.dataframe(lb, use_container_width=True, hide_index=True)
+        st.dataframe(pd.read_sql("SELECT username as Manager, total_points as Points FROM users ORDER BY total_points DESC", db_conn), use_container_width=True, hide_index=True)
 
     elif page == "Admin":
-        if st.text_input("Admin Key", type="password") == "vinodbox43":
+        st.header("🔐 Admin Portal")
+        admin_pass = st.text_input("Enter Admin Key", type="password")
+        if st.button("Verify Admin"):
+            if admin_pass == "gate2026":
+                st.session_state.admin_auth = True
+            else: st.error("Access Denied")
+        
+        if st.session_state.admin_auth:
             t1, t2, t3 = st.tabs(["Add Round", "Scoring", "User Tools"])
             with t1:
-                nr = st.text_input("Round Name")
-                ns = st.multiselect("Subjects", ["Maths", "English", "HASS", "Science", "Music"])
+                nr, ns = st.text_input("Round Name"), st.multiselect("Subjects", ["Maths", "English", "HASS", "Science", "Music"])
                 if st.button("START"):
                     db_conn.execute("UPDATE game_state SET current_round=?, subjects=? WHERE id=1", (nr, ", ".join(ns)))
                     db_conn.commit()
                     st.success("Round Updated!")
             with t2:
-                sb = st.selectbox("Sub", ["Maths", "English", "HASS", "Science", "Music"])
-                st_n = st.selectbox("Student", [p['name'] for p in MARKET_DATA])
+                sb, st_n = st.selectbox("Sub", ["Maths", "English", "HASS", "Science", "Music"]), st.selectbox("Student", [p['name'] for p in MARKET_DATA])
                 mk = st.number_input("Mark", 0.0, 100.0)
                 if st.button("Apply"):
-                    # CALCULATION: Exact Formula (includes negative capability)
                     pts = calculate_fpl_points(mk)
                     db_conn.execute("INSERT INTO score_history (round_name, student, subject, mark, points, timestamp) VALUES (?,?,?,?,?,?)", (info['current_round'], st_n, sb, mk, pts, datetime.now().strftime("%H:%M")))
                     
-                    # POINT DISTRIBUTION: Applying Captain (x2) and Triple Captain (x3)
                     c = db_conn.cursor()
+                    # We define a variable to track the max multiplier used for the success message
+                    max_mult_used = 1
+                    
                     for m_n, m_t, m_c, m_tc in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
                         if m_t and st_n in m_t:
-                            # MULTIPLIER LOGIC
+                            # Correct multiplier logic
+                            current_mult = 1
                             if st_n == m_c:
-                                if m_tc == 1:
-                                    mult = 3  # Triple Captain
-                                else:
-                                    mult = 2  # Standard Captain
-                            else:
-                                mult = 1 # Normal Player
-                                
-                            exact_gain = pts * mult
-                            c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (exact_gain, m_n))
+                                current_mult = 3 if m_tc == 1 else 2
                             
-                            # Burn the Triple Captain chip if it was active
-                            if m_tc == 1:
-                                c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (m_n,))
+                            if current_mult > max_mult_used: max_mult_used = current_mult
+                                
+                            exact_gain = pts * current_mult
+                            c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (exact_gain, m_n))
+                            if m_tc == 1: c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (m_n,))
+                    
                     db_conn.commit()
-                    st.success(f"Added {round(pts * mult, 2)} points to teams using {mult}x multiplier!")
+                    st.success(f"Added points for {st_n}! (Formula result: {round(pts, 2)})")
             with t3:
                 u_df = pd.read_sql("SELECT username, total_points FROM users", db_conn)
                 st.dataframe(u_df, use_container_width=True)
