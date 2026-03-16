@@ -76,12 +76,14 @@ if not st.session_state.auth:
             except: st.error("User exists.")
 else:
     u_data = pd.read_sql("SELECT * FROM users WHERE username=?", db_conn, params=(st.session_state.user,)).iloc[0]
-    state_res = db_conn.execute("SELECT * FROM game_state LIMIT 1").fetchone()
-    if not state_res:
-        db_conn.execute("INSERT INTO game_state (current_round, subjects) VALUES ('Round 1', 'Maths')")
+    state_query = pd.read_sql("SELECT * FROM game_state LIMIT 1", db_conn)
+    if state_query.empty:
+        db_conn.execute("INSERT INTO game_state (current_round, subjects) VALUES ('Round 1', 'Maths, English')")
         db_conn.commit()
-        state_res = ("Round 1", "Maths")
-    
+        info = {"current_round": "Round 1", "subjects": "Maths, English"}
+    else:
+        info = state_query.iloc[0]
+
     st.sidebar.title(f"Hi, {st.session_state.user}")
     st.sidebar.write(f"Points: {u_data['total_points']}")
     if u_data['tc_active'] == 1:
@@ -91,8 +93,8 @@ else:
     
     if page == "Dashboard":
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
-        st.metric("Current Round", state_res[0])
-        st.info(f"📍 Active Subjects: {state_res[1]}")
+        st.metric("Current Round", info['current_round'])
+        st.info(f"📍 Active Subjects: {info['subjects']}")
         hist = pd.read_sql("SELECT student, subject, mark, points FROM score_history ORDER BY id DESC LIMIT 5", db_conn)
         if not hist.empty: st.table(hist)
 
@@ -149,47 +151,42 @@ else:
             t1, t2, t3, t4 = st.tabs(["Set Round", "Apply Score", "User Tools", "Reset"])
             
             with t1:
-                nr, ns = st.text_input("Round Name"), st.text_input("Subjects")
-                if st.button("Update"):
+                nr = st.text_input("Round Name", value=info['current_round'])
+                ns = st.text_input("Active Subjects (Comma separated)", value=info['subjects'])
+                if st.button("Update Season State"):
                     db_conn.execute("UPDATE game_state SET current_round=?, subjects=?", (nr, ns))
                     db_conn.commit(); st.rerun()
 
             with t2:
                 st_n = st.selectbox("Student", [p['name'] for p in MARKET_DATA])
-                sub_n = st.selectbox("Subject", [s.strip() for s in state_res[1].split(",")])
+                sub_options = [s.strip() for s in info['subjects'].split(",")]
+                sub_n = st.selectbox("Subject/Exam", sub_options)
                 mk = st.number_input("Mark", 0.0, 100.0)
                 if st.button("Apply Score"):
                     new_pts = calculate_fpl_points(mk)
-                    db_conn.execute("INSERT INTO score_history (round_name, student, subject, mark, points) VALUES (?,?,?,?,?)", (state_res[0], st_n, sub_n, mk, new_pts))
-                    
-                    # --- CRITICAL x3 MATH OVERHAUL ---
+                    db_conn.execute("INSERT INTO score_history (round_name, student, subject, mark, points) VALUES (?,?,?,?,?)", (info['current_round'], st_n, sub_n, mk, new_pts))
                     c = db_conn.cursor()
-                    users = c.execute("SELECT username, team, captain, tc_active FROM users").fetchall()
-                    for u_n, u_t, u_c, u_tc_active in users:
+                    for u_n, u_t, u_c, u_tc_active in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
                         if u_t and st_n in u_t:
-                            # 1. Start with 1x
-                            mult = 1
-                            # 2. If they are captain, it's at least 2x
-                            if st_n == u_c:
-                                # 3. If TC is active, it MUST be 3x, otherwise 2x
-                                mult = 3 if u_tc_active == 1 else 2
-                            
+                            mult = 3 if (st_n == u_c and u_tc_active == 1) else (2 if st_n == u_c else 1)
                             c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (new_pts * mult, u_n))
-                            
-                            # 4. Burn the chip if used
                             if u_tc_active == 1 and st_n == u_c:
                                 c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (u_n,))
-                    db_conn.commit()
-                    st.success(f"Score applied! Cirrus and others updated.")
+                    db_conn.commit(); st.success(f"Scores applied for {sub_n}")
 
             with t3:
+                st.subheader("User Tools")
                 u_df = pd.read_sql("SELECT username, total_points, tc_available, tc_active, captain FROM users", db_conn)
                 st.dataframe(u_df, use_container_width=True)
                 target = st.selectbox("User", u_df['username'].tolist())
-                if st.button("Restore TC"):
+                adj = st.number_input("Subtract/Add Points (Manual Fix)", value=0.0)
+                if st.button("Apply Manual Adjustment"):
+                    db_conn.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (adj, target))
+                    db_conn.commit(); st.rerun()
+                if st.button("Restore Triple Captain"):
                     db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target,))
                     db_conn.commit(); st.rerun()
 
             with t4:
-                if st.button("⚠️ RESET ALL"):
+                if st.button("⚠️ FULL RESET"):
                     db_conn.execute("DELETE FROM score_history"); db_conn.execute("UPDATE users SET total_points = 0"); db_conn.commit(); st.rerun()
