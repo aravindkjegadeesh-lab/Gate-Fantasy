@@ -115,7 +115,7 @@ else:
     elif page == "Admin":
         st.header("🔐 Admin Controls")
         pw = st.text_input("Admin Key", type="password")
-        if pw == "gate2026":
+        if pw == "vinodbox43":
             t1, t2, t3 = st.tabs(["Set Round", "Apply/Edit Score", "Nuclear Reset"])
             
             with t1:
