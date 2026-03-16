@@ -81,7 +81,6 @@ if not st.session_state.auth:
                 st.success("Registered!")
             except: st.error("User exists.")
 else:
-    # Get Current Game State
     state_query = pd.read_sql("SELECT * FROM game_state LIMIT 1", db_conn)
     if state_query.empty:
         db_conn.execute("INSERT INTO game_state (current_round, subjects) VALUES ('Round 1', 'Maths, English')")
@@ -164,47 +163,38 @@ else:
                     if existing:
                         old_pts = existing[0]
                         c = db_conn.cursor()
-                        # Get managers who have this student
-                        for u_n, u_t, u_c, u_tc_available, u_tc_active in c.execute("SELECT username, team, captain, tc_available, tc_active FROM users").fetchall():
+                        for u_n, u_t, u_c, u_tc_avail, u_tc_active in c.execute("SELECT username, team, captain, tc_available, tc_active FROM users").fetchall():
                             if u_t and st_n in u_t:
-                                # Logic to reverse points: If they used a TC in the past, they get that x3 back. 
-                                # Note: This assumes TC was used on THIS student during the round.
-                                m = 1
-                                if st_n == u_c:
-                                    # If TC is active OR they've already used it (available=0) during this round update
-                                    m = 3 if (u_tc_active == 1 or u_tc_available == 0) else 2
+                                m = 3 if (st_n == u_c and (u_tc_active == 1 or u_tc_avail == 0)) else (2 if st_n == u_c else 1)
                                 c.execute("UPDATE users SET total_points = total_points - ? WHERE username=?", (old_pts * m, u_n))
                         db_conn.execute("DELETE FROM score_history WHERE student=? AND subject=? AND round_name=?", (st_n, sub_n, info['current_round']))
                     
                     # 2. APPLY Logic
                     db_conn.execute("INSERT INTO score_history (round_name, student, subject, mark, points) VALUES (?,?,?,?,?)", (info['current_round'], st_n, sub_n, mk, new_pts))
                     c = db_conn.cursor()
-                    
                     summary_logs = []
-                    
                     for u_n, u_t, u_c, u_tc_avail, u_tc_active in c.execute("SELECT username, team, captain, tc_available, tc_active FROM users").fetchall():
                         if u_t and st_n in u_t:
-                            # THE x3 FIX:
-                            # If they have TC active AND this student is their captain
-                            current_multiplier = 1
+                            multiplier = 1
                             if st_n == u_c:
+                                multiplier = 3 if u_tc_active == 1 else 2
                                 if u_tc_active == 1:
-                                    current_multiplier = 3
-                                    # Burn chip only if it was actually used for this captain
                                     c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (u_n,))
-                                else:
-                                    current_multiplier = 2
-                            
-                            gain = new_pts * current_multiplier
+                            gain = new_pts * multiplier
                             c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (gain, u_n))
-                            summary_logs.append(f"{u_n} (x{current_multiplier})")
-                    
+                            summary_logs.append(f"{u_n} (x{multiplier})")
                     db_conn.commit()
-                    st.success(f"Scores updated! Multipliers applied: {', '.join(summary_logs) if summary_logs else 'No managers affected.'}")
+                    st.success(f"Scores applied: {', '.join(summary_logs)}")
 
             with t3:
-                u_df = pd.read_sql("SELECT username, password, total_points, tc_available, tc_active FROM users", db_conn)
+                st.subheader("User Management")
+                # Updated SQL to show TC target (which is their captain if active)
+                u_df = pd.read_sql("""SELECT username, password, total_points as Points, 
+                                      tc_available as Chip_Available,
+                                      CASE WHEN tc_active = 1 THEN captain ELSE 'None' END as TC_Target
+                                      FROM users""", db_conn)
                 st.dataframe(u_df, use_container_width=True)
+                
                 target = st.selectbox("Select User", u_df['username'].tolist() if not u_df.empty else [])
                 new_p = st.text_input("New Password")
                 c1, c2, c3 = st.columns(3)
