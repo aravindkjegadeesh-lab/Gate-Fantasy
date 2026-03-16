@@ -32,9 +32,14 @@ def init_db():
 
 db_conn = init_db()
 
+# UPDATED: Allows negative points if mark < 70
 def calculate_fpl_points(mark):
-    if mark <= 70: return 0
-    return round(4 * math.pow((mark - 70), 1.2), 1)
+    diff = mark - 70
+    if diff >= 0:
+        return round(4 * math.pow(diff, 1.2), 1)
+    else:
+        # Calculates negative points for marks below 70
+        return round(-4 * math.pow(abs(diff), 1.2), 1)
 
 # MARKET DATA
 MARKET_DATA = [
@@ -57,10 +62,8 @@ player_options = [f"{p['name']} (£{p['price']}m)" for p in MARKET_DATA]
 # --- STYLE ---
 st.markdown("""<style>
     .stApp { background-color: #FFFFFF; }
-    /* Force high visibility for all text inputs and labels */
     label, p, .stMarkdown { color: #000000 !important; font-weight: 700 !important; }
     input { color: #000000 !important; background-color: #f9f9f9 !important; border: 2px solid #38003c !important; }
-    
     .fpl-header { background: #38003c; padding: 20px; border-radius: 10px; border-bottom: 5px solid #00ff87; text-align: center; margin-bottom: 25px; }
     .card { background: #f0f2f6; padding: 15px; border-radius: 10px; border-left: 5px solid #38003c; margin-bottom: 10px; color: #38003c; }
     .rule-box { background: #fff3cd; padding: 10px; border-radius: 5px; border: 1px solid #ffeeba; color: #856404; font-size: 0.9em; margin-bottom: 15px; }
@@ -72,7 +75,6 @@ if not st.session_state.auth:
     st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
     t1, t2 = st.tabs(["Login", "Sign Up"])
     with t1:
-        # Simple inputs without complex keys to ensure reliability
         u = st.text_input("Username")
         p = st.text_input("Password", type="password")
         if st.button("Log In"):
@@ -82,7 +84,7 @@ if not st.session_state.auth:
                 st.session_state.user = u
                 st.rerun()
             else:
-                st.error("Incorrect details. Please check your spelling.")
+                st.error("Incorrect details.")
     with t2:
         nu = st.text_input("Choose Username")
         np = st.text_input("Choose Password", type="password")
@@ -90,9 +92,9 @@ if not st.session_state.auth:
             try:
                 db_conn.execute("INSERT INTO users (username, password, team, captain) VALUES (?, ?, 'None', 'None')", (nu, np))
                 db_conn.commit()
-                st.success("Account created! Now go to the Login tab.")
+                st.success("Account created!")
             except: 
-                st.error("That username is taken.")
+                st.error("Username taken.")
 else:
     info = pd.read_sql("SELECT * FROM game_state WHERE id=1", db_conn).iloc[0]
     page = st.sidebar.radio("Nav", ["Dashboard", "Round History", "Grade Portal", "Player Stats", "My Squad", "Review Teams", "Leaderboard", "Admin"])
@@ -206,18 +208,13 @@ else:
                 st.dataframe(u_df, use_container_width=True)
                 target = st.selectbox("Select User", u_df['username'])
                 col_pass, col_kick = st.columns(2)
-                with col_pass:
-                    new_p = st.text_input("Set New Password", type="password")
-                    if st.button("Update Password"):
-                        db_conn.execute("UPDATE users SET password=? WHERE username=?", (new_p, target))
-                        db_conn.commit()
-                        st.success("Password Updated")
-                with col_kick:
-                    if st.button("🔴 KICK PLAYER"):
-                        db_conn.execute("DELETE FROM users WHERE username=?", (target,))
-                        db_conn.commit()
-                        st.rerun()
-                st.divider()
+                if st.button("Update Password"):
+                    db_conn.execute("UPDATE users SET password='new_password' WHERE username=?", (target,))
+                    db_conn.commit()
+                if st.button("🔴 KICK PLAYER"):
+                    db_conn.execute("DELETE FROM users WHERE username=?", (target,))
+                    db_conn.commit()
+                    st.rerun()
                 if st.button("Restore TC Chip for User"):
                     db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target,))
                     db_conn.commit()
