@@ -91,22 +91,20 @@ else:
     
     page = st.sidebar.radio("Nav", ["Dashboard", "Leaderboard", "Player Stats", "Grade Portal", "My Squad", "Review Teams", "Admin"])
     
+    # Dashboard, Leaderboard, Player Stats, Grade Portal remain identical to keep features stable.
     if page == "Dashboard":
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
         st.metric("Current Round", info['current_round'])
         st.info(f"📍 Active Subjects: {info['subjects']}")
         hist = pd.read_sql("SELECT student, subject, mark, points FROM score_history ORDER BY id DESC LIMIT 5", db_conn)
         if not hist.empty: st.table(hist)
-
     elif page == "Leaderboard":
         st.header("🏆 Official Standings")
         st.dataframe(pd.read_sql("SELECT username as Manager, total_points as Points FROM users ORDER BY total_points DESC", db_conn), use_container_width=True, hide_index=True)
-
     elif page == "Player Stats":
         st.header("📊 Total Student Points")
         stats = pd.read_sql("SELECT student as Name, SUM(points) as Total_Points FROM score_history GROUP BY student ORDER BY Total_Points DESC", db_conn)
         st.dataframe(stats, use_container_width=True, hide_index=True)
-
     elif page == "Grade Portal":
         st.header("📝 Subject Performance")
         raw = pd.read_sql("SELECT student, subject, mark FROM score_history", db_conn)
@@ -121,11 +119,13 @@ else:
         
         cap_choice = st.selectbox("Select Captain (x2)", s_names) if s_names else u_data['captain']
         
+        # TRIPLE CAPTAIN FEATURE - ENSURING VISIBILITY
         tc_active_val = u_data['tc_active']
         if u_data['tc_available'] == 1:
-            use_tc = st.checkbox("🚀 Use Triple Captain Chip?", value=bool(u_data['tc_active']))
+            st.markdown("### 🚀 Triple Captain Chip")
+            use_tc = st.checkbox("Activate Triple Captain?", value=bool(u_data['tc_active']))
             if use_tc:
-                tc_target = st.selectbox("Triple Captain Student:", s_names)
+                tc_target = st.selectbox("Target for TC x3:", s_names)
                 tc_active_val, cap_choice = 1, tc_target
             else:
                 tc_active_val = 0
@@ -135,7 +135,7 @@ else:
                 db_conn.execute("UPDATE users SET team=?, captain=?, tc_active=? WHERE username=?", 
                                 (", ".join(s_names), cap_choice, tc_active_val, st.session_state.user))
                 db_conn.commit()
-                st.success("Squad Saved!")
+                st.success("Squad & Chips Updated!")
                 st.rerun()
 
     elif page == "Review Teams":
@@ -167,7 +167,6 @@ else:
                 
                 if st.button("Apply Score"):
                     c = db_conn.cursor()
-                    # 1. Check for existing score to UNDO
                     existing = c.execute("SELECT points FROM score_history WHERE student=? AND subject=? AND round_name=?", (st_n, sub_n, info['current_round'])).fetchone()
                     if existing:
                         old_pts = existing[0]
@@ -177,54 +176,48 @@ else:
                                 c.execute("UPDATE users SET total_points = total_points - ? WHERE username=?", (old_pts * m, u_n))
                         c.execute("DELETE FROM score_history WHERE student=? AND subject=? AND round_name=?", (st_n, sub_n, info['current_round']))
 
-                    # 2. APPLY NEW SCORE
                     new_pts = calculate_fpl_points(mk)
                     c.execute("INSERT INTO score_history (round_name, student, subject, mark, points) VALUES (?,?,?,?,?)", (info['current_round'], st_n, sub_n, mk, new_pts))
                     
                     for u_n, u_t, u_c, u_tc_act in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
                         if u_t and st_n in u_t:
-                            multiplier = 1
-                            if st_n == u_c:
-                                multiplier = 3 if u_tc_act == 1 else 2
-                            
+                            multiplier = 3 if (st_n == u_c and u_tc_act == 1) else (2 if st_n == u_c else 1)
                             c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (new_pts * multiplier, u_n))
-                            # Only burn TC if it was active and the student scored for was the captain
                             if u_tc_act == 1 and st_n == u_c:
                                 c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (u_n,))
-                    db_conn.commit(); st.success(f"Scores applied for {st_n}!")
+                    db_conn.commit(); st.success(f"Score for {st_n} processed.")
 
                 st.markdown("---")
-                st.subheader("🔴 DELETE SPECIFIC SCORE")
-                del_st = st.selectbox("Student to Wipe", [p['name'] for p in MARKET_DATA], key="dst")
-                del_mode = st.radio("Deletion Mode", ["Specific Entry", "All Round Scores for Student"])
-                del_sub = st.selectbox("Select Entry", sub_opts, key="dsub") if del_mode == "Specific Entry" else None
+                st.subheader("🔴 DELETE SCORES")
+                del_st = st.selectbox("Target Student", [p['name'] for p in MARKET_DATA], key="dst")
+                del_mode = st.radio("Mode", ["Specific Entry", "Whole Round for Student"])
+                del_sub = st.selectbox("Entry", sub_opts, key="dsub") if del_mode == "Specific Entry" else None
                 
-                if st.button("🔴 Wipe and Recalculate"):
+                if st.button("🔴 Wipe and Fix Leaderboard"):
                     c = db_conn.cursor()
                     q = "SELECT points, subject FROM score_history WHERE student=? AND round_name=?"
                     p = [del_st, info['current_round']]
                     if del_sub: q += " AND subject=?"; p.append(del_sub)
                     
-                    to_del = c.execute(q, p).fetchall()
-                    for pts, sub in to_del:
+                    for pts, sub in c.execute(q, p).fetchall():
                         for u_n, u_t, u_c, u_tc_av, u_tc_act in c.execute("SELECT username, team, captain, tc_available, tc_active FROM users").fetchall():
                             if u_t and del_st in u_t:
-                                # Safe multiplier check for deletion
                                 m = 3 if (del_st == u_c and (u_tc_act == 1 or u_tc_av == 0)) else (2 if del_st == u_c else 1)
                                 c.execute("UPDATE users SET total_points = total_points - ? WHERE username=?", (pts * m, u_n))
                         c.execute("DELETE FROM score_history WHERE student=? AND subject=? AND round_name=?", (del_st, sub, info['current_round']))
-                    db_conn.commit(); st.warning("Deleted. Check Leaderboard.")
+                    db_conn.commit(); st.warning("Deleted. Check scores."); st.rerun()
 
             with t3:
+                st.subheader("Manager Tools")
                 u_df = pd.read_sql("SELECT username, password, total_points, tc_available, tc_active FROM users", db_conn)
                 st.dataframe(u_df, use_container_width=True)
                 target = st.selectbox("Select User", u_df['username'].tolist())
-                new_p = st.text_input("New Password")
-                adj = st.number_input("Manual Adjustment (+/-)", value=0.0)
+                new_p = st.text_input("Reset Password")
+                adj = st.number_input("Add/Sub Points", value=0.0)
                 c1, c2, c3, c4 = st.columns(4)
                 if c1.button("Update Pass"): db_conn.execute("UPDATE users SET password=? WHERE username=?", (new_p, target)); db_conn.commit(); st.success("Updated")
-                if c2.button("Apply Pts"): db_conn.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (adj, target)); db_conn.commit(); st.rerun()
-                if c3.button("Restore TC"): db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target,)); db_conn.commit(); st.success("TC Restored")
+                if c2.button("Adjust Pts"): db_conn.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (adj, target)); db_conn.commit(); st.rerun()
+                if c3.button("Restore TC"): db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target,)); db_conn.commit(); st.success("TC Ready")
                 if c4.button("🔴 KICK"): db_conn.execute("DELETE FROM users WHERE username=?", (target,)); db_conn.commit(); st.rerun()
 
             with t4:
