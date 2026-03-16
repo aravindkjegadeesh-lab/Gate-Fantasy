@@ -90,7 +90,7 @@ else:
     else:
         info = state_query.iloc[0]
 
-    page = st.sidebar.radio("Nav", ["Dashboard", "Leaderboard", "Grade Portal", "My Squad", "Admin"])
+    page = st.sidebar.radio("Nav", ["Dashboard", "Leaderboard", "Player Stats", "Grade Portal", "My Squad", "Review Teams", "Admin"])
     
     if page == "Dashboard":
         st.markdown('<div class="fpl-header"><h1 style="color:#00ff87;">GATE FANTASY</h1></div>', unsafe_allow_html=True)
@@ -102,6 +102,11 @@ else:
     elif page == "Leaderboard":
         st.header("🏆 Official Standings")
         st.dataframe(pd.read_sql("SELECT username as Manager, total_points as Points FROM users ORDER BY total_points DESC", db_conn), use_container_width=True, hide_index=True)
+
+    elif page == "Player Stats":
+        st.header("📊 Total Student Points")
+        stats = pd.read_sql("SELECT student as Name, SUM(points) as Total_Points FROM score_history GROUP BY student ORDER BY Total_Points DESC", db_conn)
+        st.dataframe(stats, use_container_width=True, hide_index=True)
 
     elif page == "Grade Portal":
         st.header("📝 Subject Performance")
@@ -124,7 +129,14 @@ else:
                 db_conn.commit()
                 st.success("Squad Locked!")
                 st.rerun()
-            else: st.error("Check budget or player count.")
+
+    elif page == "Review Teams":
+        st.header("👀 Review Teams")
+        others = pd.read_sql("SELECT username, team, captain FROM users WHERE team != 'None'", db_conn)
+        for idx, row in others.iterrows():
+            with st.expander(row['username']):
+                st.write(f"**Team:** {row['team']}")
+                st.write(f"**Captain:** {row['captain']}")
 
     elif page == "Admin":
         st.header("🔐 Admin Controls")
@@ -133,18 +145,17 @@ else:
             t1, t2, t3, t4 = st.tabs(["Set Round", "Apply/Edit Score", "User Tools", "Nuclear Reset"])
             
             with t1:
-                nr = st.text_input("Round Name (e.g. Week 1)")
-                ns = st.text_input("Active Exams (e.g. Maths Test, Science Quiz)")
+                nr = st.text_input("Round Name")
+                ns = st.text_input("Active Exams")
                 if st.button("Update Season State"):
                     db_conn.execute("UPDATE game_state SET current_round=?, subjects=?", (nr, ns))
                     db_conn.commit()
-                    st.success("Round Updated!")
+                    st.rerun()
 
             with t2:
-                st.write("Overwrites existing Student/Subject scores automatically.")
                 st_n = st.selectbox("Student", [p['name'] for p in MARKET_DATA])
                 sub_options = [s.strip() for s in info['subjects'].split(",")]
-                sub_n = st.selectbox("Subject/Exam", sub_options if sub_options else ["No Subjects Set"])
+                sub_n = st.selectbox("Subject/Exam", sub_options)
                 mk = st.number_input("Mark", 0.0, 100.0)
                 if st.button("Apply Score"):
                     new_pts = calculate_fpl_points(mk)
@@ -157,6 +168,7 @@ else:
                                 m = 3 if (st_n == u_c and u_tc) else (2 if st_n == u_c else 1)
                                 c.execute("UPDATE users SET total_points = total_points - ? WHERE username=?", (old_pts * m, u_n))
                         db_conn.execute("DELETE FROM score_history WHERE student=? AND subject=? AND round_name=?", (st_n, sub_n, info['current_round']))
+                    
                     db_conn.execute("INSERT INTO score_history (round_name, student, subject, mark, points) VALUES (?,?,?,?,?)", (info['current_round'], st_n, sub_n, mk, new_pts))
                     c = db_conn.cursor()
                     for u_n, u_t, u_c, u_tc in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
@@ -171,27 +183,22 @@ else:
                 st.subheader("Manage Participants")
                 u_df = pd.read_sql("SELECT username, password, total_points, tc_available, tc_active FROM users", db_conn)
                 st.dataframe(u_df, use_container_width=True)
-                
-                target = st.selectbox("Select User", u_df['username'].tolist() if not u_df.empty else ["No Users"])
-                new_pass = st.text_input("Set New Password")
-                
+                target = st.selectbox("Select User", u_df['username'].tolist() if not u_df.empty else [])
+                new_p = st.text_input("New Password")
                 c1, c2, c3 = st.columns(3)
-                if c1.button("Update Password"):
-                    db_conn.execute("UPDATE users SET password=? WHERE username=?", (new_pass, target))
+                if c1.button("Update Pass"):
+                    db_conn.execute("UPDATE users SET password=? WHERE username=?", (new_p, target))
                     db_conn.commit()
-                    st.success("Password Updated")
-                if c2.button("Restore TC Chip"):
+                if c2.button("Restore TC"):
                     db_conn.execute("UPDATE users SET tc_available=1, tc_active=0 WHERE username=?", (target,))
                     db_conn.commit()
-                    st.success("Triple Captain Chip Restored")
-                if c3.button("🔴 KICK PLAYER"):
+                if c3.button("🔴 KICK"):
                     db_conn.execute("DELETE FROM users WHERE username=?", (target,))
                     db_conn.commit()
                     st.rerun()
 
             with t4:
-                st.warning("DANGER: This wipes all scores and resets leaderboard to 0.")
-                if st.button("⚠️ FULL SEASON RESET"):
+                if st.button("⚠️ FULL RESET"):
                     db_conn.execute("DELETE FROM score_history")
                     db_conn.execute("UPDATE users SET total_points = 0")
                     db_conn.commit()
