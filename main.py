@@ -121,11 +121,11 @@ else:
         cost = sum(player_prices[n] for n in s_names)
         st.write(f"Budget: £{cost}m / £90m")
         cap = st.selectbox("Select Captain", s_names) if s_names else None
-        tc_active = st.checkbox("🚀 Activate Triple Captain") if user['tc_available'] == 1 else False
+        tc_ready = st.checkbox("🚀 Activate Triple Captain") if user['tc_available'] == 1 else False
         
         if st.button("Save Squad"):
             if len(s_names) == 5 and cost <= 90:
-                db_conn.execute("UPDATE users SET team=?, captain=?, tc_active=? WHERE username=?", (", ".join(s_names), cap, 1 if tc_active else 0, st.session_state.user))
+                db_conn.execute("UPDATE users SET team=?, captain=?, tc_active=? WHERE username=?", (", ".join(s_names), cap, 1 if tc_ready else 0, st.session_state.user))
                 db_conn.commit()
                 st.success("Squad Locked!")
                 st.rerun()
@@ -159,34 +159,48 @@ else:
                 if st.button("Apply Score"):
                     new_pts = calculate_fpl_points(mk)
                     
-                    # 1. UNDO logic (Check if exists)
+                    # 1. UNDO Logic
                     existing = db_conn.execute("SELECT points FROM score_history WHERE student=? AND subject=? AND round_name=?", (st_n, sub_n, info['current_round'])).fetchone()
                     if existing:
                         old_pts = existing[0]
                         c = db_conn.cursor()
-                        for u_n, u_t, u_c, u_tc in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
+                        # Get managers who have this student
+                        for u_n, u_t, u_c, u_tc_available, u_tc_active in c.execute("SELECT username, team, captain, tc_available, tc_active FROM users").fetchall():
                             if u_t and st_n in u_t:
-                                m = 3 if (st_n == u_c and u_tc == 1) else (2 if st_n == u_c else 1)
+                                # Logic to reverse points: If they used a TC in the past, they get that x3 back. 
+                                # Note: This assumes TC was used on THIS student during the round.
+                                m = 1
+                                if st_n == u_c:
+                                    # If TC is active OR they've already used it (available=0) during this round update
+                                    m = 3 if (u_tc_active == 1 or u_tc_available == 0) else 2
                                 c.execute("UPDATE users SET total_points = total_points - ? WHERE username=?", (old_pts * m, u_n))
                         db_conn.execute("DELETE FROM score_history WHERE student=? AND subject=? AND round_name=?", (st_n, sub_n, info['current_round']))
                     
-                    # 2. APPLY logic (Fixed x3 logic)
+                    # 2. APPLY Logic
                     db_conn.execute("INSERT INTO score_history (round_name, student, subject, mark, points) VALUES (?,?,?,?,?)", (info['current_round'], st_n, sub_n, mk, new_pts))
                     c = db_conn.cursor()
-                    for u_n, u_t, u_c, u_tc in c.execute("SELECT username, team, captain, tc_active FROM users").fetchall():
+                    
+                    summary_logs = []
+                    
+                    for u_n, u_t, u_c, u_tc_avail, u_tc_active in c.execute("SELECT username, team, captain, tc_available, tc_active FROM users").fetchall():
                         if u_t and st_n in u_t:
-                            # CRITICAL FIX: Ensure tc_active is checked properly
-                            multiplier = 1
+                            # THE x3 FIX:
+                            # If they have TC active AND this student is their captain
+                            current_multiplier = 1
                             if st_n == u_c:
-                                multiplier = 3 if u_tc == 1 else 2
-                                
-                            c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (new_pts * multiplier, u_n))
+                                if u_tc_active == 1:
+                                    current_multiplier = 3
+                                    # Burn chip only if it was actually used for this captain
+                                    c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (u_n,))
+                                else:
+                                    current_multiplier = 2
                             
-                            # Burn chip after usage
-                            if u_tc == 1 and st_n == u_c:
-                                c.execute("UPDATE users SET tc_available=0, tc_active=0 WHERE username=?", (u_n,))
+                            gain = new_pts * current_multiplier
+                            c.execute("UPDATE users SET total_points = total_points + ? WHERE username=?", (gain, u_n))
+                            summary_logs.append(f"{u_n} (x{current_multiplier})")
+                    
                     db_conn.commit()
-                    st.success(f"Score applied! Multipliers calculated for all squads.")
+                    st.success(f"Scores updated! Multipliers applied: {', '.join(summary_logs) if summary_logs else 'No managers affected.'}")
 
             with t3:
                 u_df = pd.read_sql("SELECT username, password, total_points, tc_available, tc_active FROM users", db_conn)
